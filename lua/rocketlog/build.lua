@@ -2,31 +2,37 @@ local config = require("rocketlog.config")
 
 local M = {}
 
+local WRAPPED_BLOCK_PAIRS = {
+	["{"] = "}",
+	["["] = "]",
+	["("] = ")",
+}
+
 local function escape_template_text(text)
-	local escaped = text:gsub("\\", "\\\\")
-	escaped = escaped:gsub("`", "\\`")
-	escaped = escaped:gsub("%${", "\\${")
-	return escaped
+	local escaped_text = text:gsub("\\", "\\\\")
+	escaped_text = escaped_text:gsub("`", "\\`")
+	escaped_text = escaped_text:gsub("%${", "\\${")
+	return escaped_text
 end
 
 local function trim_blank_edges(lines)
-	local start_idx = 1
-	local end_idx = #lines
+	local start_index = 1
+	local end_index = #lines
 
-	while start_idx <= end_idx and not lines[start_idx]:match("%S") do
-		start_idx = start_idx + 1
+	while start_index <= end_index and not lines[start_index]:match("%S") do
+		start_index = start_index + 1
 	end
 
-	while end_idx >= start_idx and not lines[end_idx]:match("%S") do
-		end_idx = end_idx - 1
+	while end_index >= start_index and not lines[end_index]:match("%S") do
+		end_index = end_index - 1
 	end
 
-	local trimmed = {}
-	for i = start_idx, end_idx do
-		table.insert(trimmed, lines[i])
+	local trimmed_lines = {}
+	for index = start_index, end_index do
+		table.insert(trimmed_lines, lines[index])
 	end
 
-	return trimmed
+	return trimmed_lines
 end
 
 local function leading_indent_width(line)
@@ -38,82 +44,131 @@ local function strip_indent(line, width)
 	if not line:match("%S") then
 		return ""
 	end
+
 	return line:sub(width + 1)
 end
 
-local function dedent_lines_smart(lines)
-	local normalized = trim_blank_edges(lines)
-	if #normalized <= 1 then
-		return normalized
-	end
+local function minimum_nonblank_indent(lines)
+	local minimum_indent_width
 
-	-- Step 1: remove common outer indentation from all non-empty lines
-	local common_min = nil
-	for _, line in ipairs(normalized) do
+	for _, line in ipairs(lines) do
 		if line:match("%S") then
-			local indent = leading_indent_width(line)
-			if common_min == nil or indent < common_min then
-				common_min = indent
+			local indent_width = leading_indent_width(line)
+			if minimum_indent_width == nil or indent_width < minimum_indent_width then
+				minimum_indent_width = indent_width
 			end
 		end
 	end
 
-	local base = {}
-	if not common_min or common_min == 0 then
-		base = vim.deepcopy(normalized)
-	else
-		for _, line in ipairs(normalized) do
-			table.insert(base, strip_indent(line, common_min))
-		end
-	end
-
-	-- Step 2: wrapped block normalization (canonicalize to { ... } with 2-space inner indent)
-	local first_text = (base[1] or ""):gsub("^%s*", "")
-	local last_text = (base[#base] or ""):gsub("^%s*", "")
-
-	local is_wrapped_block = (first_text == "{" and last_text == "}")
-		or (first_text == "[" and last_text == "]")
-		or (first_text == "(" and last_text == ")")
-
-	if not is_wrapped_block then
-		return base
-	end
-
-	local out = {}
-	table.insert(out, first_text)
-
-	-- Find the minimum indent across middle non-empty lines
-	local middle_min = nil
-	for i = 2, #base - 1 do
-		local line = base[i]
-		if line and line:match("%S") then
-			local indent = leading_indent_width(line)
-			if middle_min == nil or indent < middle_min then
-				middle_min = indent
-			end
-		end
-	end
-
-	-- Rebase middle lines so the shallowest middle line is exactly 2 spaces
-	for i = 2, #base - 1 do
-		local line = base[i] or ""
-		if not line:match("%S") then
-			table.insert(out, "")
-		else
-			local rebased = line
-			if middle_min and middle_min > 0 then
-				rebased = strip_indent(line, middle_min)
-			end
-			table.insert(out, "  " .. rebased)
-		end
-	end
-
-	table.insert(out, last_text)
-	return out
+	return minimum_indent_width
 end
 
-local function normalize_label_text_single_line(expr)
-	return expr:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+local function strip_common_indent(lines)
+	local common_indent_width = minimum_nonblank_indent(lines)
+	if not common_indent_width or common_indent_width == 0 then
+		return vim.deepcopy(lines)
+	end
+
+	local dedented_lines = {}
+	for _, line in ipairs(lines) do
+		table.insert(dedented_lines, strip_indent(line, common_indent_width))
+	end
+
+	return dedented_lines
+end
+
+local function trim_left(line)
+	return (line or ""):gsub("^%s*", "")
+end
+
+local function is_wrapped_block(first_text, last_text)
+	return WRAPPED_BLOCK_PAIRS[first_text] == last_text
+end
+
+local function middle_lines(lines)
+	local items = {}
+	for index = 2, #lines - 1 do
+		table.insert(items, lines[index])
+	end
+
+	return items
+end
+
+local function normalize_wrapped_block_lines(lines)
+	local first_text = trim_left(lines[1])
+	local last_text = trim_left(lines[#lines])
+
+	if not is_wrapped_block(first_text, last_text) then
+		return lines
+	end
+
+	local normalized_block_lines = { first_text }
+	local middle_indent_width = minimum_nonblank_indent(middle_lines(lines))
+
+	for index = 2, #lines - 1 do
+		local line = lines[index] or ""
+		if not line:match("%S") then
+			table.insert(normalized_block_lines, "")
+		else
+			local rebased_line = line
+			if middle_indent_width and middle_indent_width > 0 then
+				rebased_line = strip_indent(line, middle_indent_width)
+			end
+			table.insert(normalized_block_lines, "  " .. rebased_line)
+		end
+	end
+
+	table.insert(normalized_block_lines, last_text)
+	return normalized_block_lines
+end
+
+local function dedent_lines_smart(lines)
+	local trimmed_lines = trim_blank_edges(lines)
+	if #trimmed_lines <= 1 then
+		return trimmed_lines
+	end
+
+	return normalize_wrapped_block_lines(strip_common_indent(trimmed_lines))
+end
+
+local function normalize_label_text_single_line(expression)
+	return expression:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function build_single_line_log(console_method, marker_label, file, line_number, expression)
+	local label_text = escape_template_text(normalize_label_text_single_line(expression))
+
+	return {
+		string.format(
+			"console.%s(`🚀[%s] ~ %s:%d ~ %s:`, %s);",
+			console_method,
+			marker_label,
+			file,
+			line_number,
+			label_text,
+			expression
+		),
+	}
+end
+
+local function build_multiline_log(console_method, marker_label, file, line_number, expression_lines)
+	local normalized_expression_lines = dedent_lines_smart(expression_lines)
+	local output_lines = {
+		string.format("console.%s(`🚀[%s] ~ %s:%d ~", console_method, marker_label, file, line_number),
+	}
+
+	for _, expression_line in ipairs(normalized_expression_lines) do
+		table.insert(output_lines, escape_template_text(expression_line))
+	end
+
+	output_lines[#output_lines] = output_lines[#output_lines] .. "`,"
+
+	for _, expression_line in ipairs(normalized_expression_lines) do
+		table.insert(output_lines, "  " .. expression_line)
+	end
+
+	table.insert(output_lines, ");")
+	return output_lines
 end
 
 ---Build the console statement line(s) for the selected expression.
@@ -124,46 +179,15 @@ end
 ---@param log_type string|nil Optional console method (log, error, warn, info, etc.)
 ---@return string[]
 function M.build_rocket_log_lines(file, line_num, expr, log_type)
-	local method = log_type or "log"
+	local console_method = log_type or "log"
+	local marker_label = config.get_label()
 	local expression_lines = vim.split(expr, "\n", { plain = true })
-	local rocketlog_label = config.get_label()
 
 	if #expression_lines == 1 then
-		local label_text = escape_template_text(normalize_label_text_single_line(expr))
-		return {
-			string.format(
-				"console.%s(`🚀[%s] ~ %s:%d ~ %s:`, %s);",
-				method,
-				rocketlog_label,
-				file,
-				line_num,
-				label_text,
-				expr
-			),
-		}
+		return build_single_line_log(console_method, marker_label, file, line_num, expr)
 	end
 
-	local normalized_lines = dedent_lines_smart(expression_lines)
-
-	local output_lines = {
-		string.format("console.%s(`🚀[%s] ~ %s:%d ~", method, rocketlog_label, file, line_num),
-	}
-
-	-- Template string body (preserve normalized formatting)
-	for _, expression_line in ipairs(normalized_lines) do
-		table.insert(output_lines, escape_template_text(expression_line))
-	end
-
-	output_lines[#output_lines] = output_lines[#output_lines] .. "`,"
-
-	-- Logged value block (always indent consistently)
-	for _, expression_line in ipairs(normalized_lines) do
-		table.insert(output_lines, "  " .. expression_line)
-	end
-
-	table.insert(output_lines, ");")
-
-	return output_lines
+	return build_multiline_log(console_method, marker_label, file, line_num, expression_lines)
 end
 
 return M

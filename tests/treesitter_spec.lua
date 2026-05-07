@@ -170,11 +170,12 @@ describe("rocketlog.treesitter", function()
 		assert.are.equal("implicit_arrow_body", err)
 	end)
 
-	it("rejects selections in function parameter lists", function()
+	it("routes function parameter selections into the function body", function()
 		local program = new_node("program", 0, 0, 0, 0)
 		local fn = add_child(program, new_node("function_declaration", 0, 0, 4, 0))
 		local params = add_child(fn, new_node("formal_parameters", 0, 10, 0, 20))
-		add_child(fn, new_node("statement_block", 1, 0, 4, 0))
+		local body = add_child(fn, new_node("statement_block", 1, 0, 4, 0))
+		add_child(body, new_node("return_statement", 2, 2, 2, 12))
 
 		program.named_descendant_for_range = function()
 			return params
@@ -194,8 +195,12 @@ describe("rocketlog.treesitter", function()
 			end_col = 13,
 		})
 
-		assert.is_nil(target)
-		assert.are.equal("selection_in_function_header", err)
+		assert.is_nil(err)
+		assert.are.equal("inside_block_start", target.mode)
+		assert.are.equal(3, target.insert_line)
+		assert.are.equal(3, target.reference_line)
+		assert.are.equal(2, target.block_start_line)
+		assert.are.equal(5, target.block_end_line)
 	end)
 
 	it("returns nil or fallback signal when parser is unavailable", function()

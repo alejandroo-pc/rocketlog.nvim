@@ -85,6 +85,16 @@ local function node_range_1_based(node)
 	}
 end
 
+local function node_range_0_based(node)
+	local sr, sc, er, ec = node:range()
+	return {
+		start_row = sr,
+		start_col = sc,
+		end_row = er,
+		end_col = ec,
+	}
+end
+
 local function is_descendant(node, possible_ancestor)
 	local current = node
 	while current do
@@ -103,6 +113,20 @@ local function first_child_of_type(node, wanted_type)
 
 	for child in node:iter_children() do
 		if child:named() and child:type() == wanted_type then
+			return child
+		end
+	end
+
+	return nil
+end
+
+local function first_named_child(node)
+	if not node then
+		return nil
+	end
+
+	for child in node:iter_children() do
+		if child:named() then
 			return child
 		end
 	end
@@ -151,27 +175,55 @@ local function prefer_before_for_header_context(selected_node, statement_node)
 	return true
 end
 
-local function resolve_function_scope_restriction(selected_node)
+local function resolve_function_scope_context(selected_node)
 	local fn = nearest_function_ancestor(selected_node)
 	if not fn then
-		return true, nil
+		return {
+			in_function = false,
+		}, nil
 	end
 
 	local body_block = first_child_of_type(fn, "statement_block")
 	if body_block then
-		if is_descendant(selected_node, body_block) then
-			return true, body_block
-		end
-
-		return false, "selection_in_function_header"
+		return {
+			in_function = true,
+			in_body = is_descendant(selected_node, body_block),
+			body_block = body_block,
+		}, nil
 	end
 
 	-- Arrow function with implicit expression body: no statement slot exists in local scope.
 	if fn:type() == "arrow_function" then
-		return false, "implicit_arrow_body"
+		return nil, "implicit_arrow_body"
 	end
 
-	return false, "unsupported_function_scope"
+	return nil, "unsupported_function_scope"
+end
+
+local function build_function_body_entry_target(body_block)
+	local block_range_0 = node_range_0_based(body_block)
+	local block_range_1 = node_range_1_based(body_block)
+	local first_body_child = first_named_child(body_block)
+	local insert_line = block_range_1.end_row
+	local reference_line = block_range_1.start_row
+
+	if first_body_child then
+		local child_range = node_range_1_based(first_body_child)
+		insert_line = child_range.start_row
+		reference_line = child_range.start_row
+	end
+
+	return {
+		mode = "inside_block_start",
+		insert_line = insert_line,
+		reference_line = reference_line,
+		statement_type = "statement_block",
+		source = "treesitter",
+		block_start_line = block_range_1.start_row,
+		block_end_line = block_range_1.end_row,
+		block_start_col = block_range_0.start_col,
+		block_end_col = block_range_0.end_col,
+	}
 end
 
 local function ascend_to_statement(selected_node)
@@ -214,9 +266,13 @@ function M.resolve_insertion(opts)
 		return nil, "node_not_found"
 	end
 
-	local scope_ok, scope_info = resolve_function_scope_restriction(selected_node)
-	if not scope_ok then
-		return nil, scope_info
+	local scope_context, scope_err = resolve_function_scope_context(selected_node)
+	if not scope_context then
+		return nil, scope_err
+	end
+
+	if scope_context.in_function and not scope_context.in_body then
+		return build_function_body_entry_target(scope_context.body_block), nil
 	end
 
 	local statement_node = ascend_to_statement(selected_node)

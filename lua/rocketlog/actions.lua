@@ -22,9 +22,13 @@ local function notify_unsupported_filetype(filetype)
 	vim.notify("RocketLog: unsupported filetype '" .. filetype .. "'", vim.log.levels.WARN)
 end
 
+local function clear_operator_state()
+	_G.__rocket_log_anchor_line = nil
+end
+
 ---@param reason string|nil
 ---@return boolean
-local function handle_insert_scope_error(reason)
+local function notify_insert_scope_error(reason)
 	local message = INSERT_SCOPE_MESSAGES[reason]
 	if not message then
 		return false
@@ -67,12 +71,49 @@ local function insert_generated_log(generated_lines, anchor_line, context)
 	return insert.insert_after_statement(generated_lines, anchor_line, context)
 end
 
+---@param selection_start_line integer
+---@param selection_end_line integer
+---@param start_col integer|nil
+---@param end_col integer|nil
+---@param start_row0 integer
+---@param end_row0 integer
+---@return table
+local function build_selection_insert_context(
+	selection_start_line,
+	selection_end_line,
+	start_col,
+	end_col,
+	start_row0,
+	end_row0
+)
+	return {
+		start_row0 = start_row0,
+		start_col0 = start_col or 0,
+		end_row0 = end_row0,
+		end_col0 = end_col or 0,
+		selection_start_line = selection_start_line,
+		selection_end_line = selection_end_line,
+	}
+end
+
+---@param current_line integer
+---@param current_column0 integer
+---@return table
+local function build_cursor_insert_context(current_line, current_column0)
+	return {
+		start_row0 = current_line - 1,
+		start_col0 = current_column0,
+		end_row0 = current_line - 1,
+		end_col0 = current_column0,
+	}
+end
+
 ---@param optype string
 ---@param log_type string|nil
 function M.motions(optype, log_type)
 	if not current_filetype_supported() then
 		notify_unsupported_filetype(vim.bo.filetype)
-		_G.__rocket_log_anchor_line = nil
+		clear_operator_state()
 		return
 	end
 
@@ -80,35 +121,37 @@ function M.motions(optype, log_type)
 		selection.get_text_from_marks(optype)
 
 	if not selected_expression or selected_expression == "" then
-		_G.__rocket_log_anchor_line = nil
+		clear_operator_state()
 		return
 	end
 
 	local normalized_anchor_line = insert.normalize_anchor_line(_G.__rocket_log_anchor_line, selection_start_line)
-	local log_line_number = insert.find_log_line_number(normalized_anchor_line)
 	local generated_log_lines = build_log_lines(
 		vim.fn.expand("%:t"),
-		log_line_number,
+		insert.find_log_line_number(normalized_anchor_line),
 		selected_expression,
 		log_type
 	)
+	local _, insert_error = insert_generated_log(
+		generated_log_lines,
+		normalized_anchor_line,
+		build_selection_insert_context(
+			selection_start_line,
+			selection_end_line,
+			start_col,
+			end_col,
+			start_row0,
+			end_row0
+		)
+	)
 
-	local _, insert_error = insert_generated_log(generated_log_lines, normalized_anchor_line, {
-		start_row0 = start_row0,
-		start_col0 = start_col or 0,
-		end_row0 = end_row0,
-		end_col0 = end_col or 0,
-		selection_start_line = selection_start_line,
-		selection_end_line = selection_end_line,
-	})
-
-	if handle_insert_scope_error(insert_error) then
-		_G.__rocket_log_anchor_line = nil
+	if notify_insert_scope_error(insert_error) then
+		clear_operator_state()
 		return
 	end
 
 	refresh_after_insert_if_enabled()
-	_G.__rocket_log_anchor_line = nil
+	clear_operator_state()
 end
 
 ---@param log_type string|nil
@@ -126,15 +169,13 @@ function M.log_word_under_cursor(log_type)
 		vim.fn.expand("<cword>"),
 		log_type
 	)
+	local _, insert_error = insert_generated_log(
+		generated_log_lines,
+		current_line,
+		build_cursor_insert_context(current_line, current_column0)
+	)
 
-	local _, insert_error = insert_generated_log(generated_log_lines, current_line, {
-		start_row0 = current_line - 1,
-		start_col0 = current_column0,
-		end_row0 = current_line - 1,
-		end_col0 = current_column0,
-	})
-
-	if handle_insert_scope_error(insert_error) then
+	if notify_insert_scope_error(insert_error) then
 		return
 	end
 

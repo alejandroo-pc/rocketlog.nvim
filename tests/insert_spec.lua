@@ -340,6 +340,88 @@ describe("rocketlog.insert", function()
 		package.loaded["rocketlog.treesitter"] = nil
 	end)
 
+	it("inserts at the top of a multiline function body for header selections", function()
+		config.apply({ prefer_treesitter = true })
+
+		package.loaded["rocketlog.treesitter"] = {
+			resolve_insertion = function(_)
+				return {
+					mode = "inside_block_start",
+					insert_line = 2,
+					reference_line = 2,
+					block_start_line = 1,
+					block_end_line = 3,
+					block_start_col = 21,
+					block_end_col = 0,
+					source = "treesitter",
+				}, nil
+			end,
+		}
+
+		h.set_buffer({
+			"function demo(value) {",
+			"  return value;",
+			"}",
+		}, { filetype = "typescript" })
+
+		local inserted_at = insert.insert_after_statement(
+			"console.log(value);",
+			1,
+			{ start_row0 = 0, start_col0 = 14, end_row0 = 0, end_col0 = 18 }
+		)
+
+		local lines = h.get_lines()
+		assert.are.equal(2, inserted_at)
+		assert.are.same({
+			"function demo(value) {",
+			"  console.log(value);",
+			"  return value;",
+			"}",
+		}, lines)
+
+		package.loaded["rocketlog.treesitter"] = nil
+	end)
+
+	it("rewrites single-line function bodies when inserting from a header selection", function()
+		config.apply({ prefer_treesitter = true })
+
+		package.loaded["rocketlog.treesitter"] = {
+			resolve_insertion = function(_)
+				return {
+					mode = "inside_block_start",
+					insert_line = 1,
+					reference_line = 1,
+					block_start_line = 1,
+					block_end_line = 1,
+					block_start_col = 24,
+					block_end_col = 41,
+					source = "treesitter",
+				}, nil
+			end,
+		}
+
+		h.set_buffer({
+			"const demo = (value) => { return value; };",
+		}, { filetype = "typescript" })
+
+		local inserted_at = insert.insert_after_statement(
+			"console.log(value);",
+			1,
+			{ start_row0 = 0, start_col0 = 14, end_row0 = 0, end_col0 = 18 }
+		)
+
+		local lines = h.get_lines()
+		assert.are.equal(2, inserted_at)
+		assert.are.same({
+			"const demo = (value) => {",
+			"  console.log(value);",
+			"  return value;",
+			"};",
+		}, lines)
+
+		package.loaded["rocketlog.treesitter"] = nil
+	end)
+
 	it("does not fall back when fallback_to_heuristics is false", function()
 		config.apply({ prefer_treesitter = true, fallback_to_heuristics = false })
 
