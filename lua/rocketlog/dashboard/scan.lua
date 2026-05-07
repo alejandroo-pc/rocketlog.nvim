@@ -30,6 +30,7 @@ local function truncate(text, max_width)
 	if #text <= max_width then
 		return text
 	end
+
 	return text:sub(1, max_width - 1) .. "…"
 end
 
@@ -46,12 +47,14 @@ local function normalize_path(path)
 		if path:match("^/") then
 			return vim.fs.normalize(path)
 		end
+
 		return vim.fs.normalize(vim.fn.getcwd() .. "/" .. path)
 	end
 
 	if path:match("^/") then
 		return path
 	end
+
 	return vim.fn.getcwd() .. "/" .. path
 end
 
@@ -60,11 +63,12 @@ local function path_is_readable(path)
 end
 
 local function should_skip_path(path, excluded_dirs)
-	for _, dir in ipairs(excluded_dirs or {}) do
-		if path:find("/" .. dir .. "/", 1, true) or path:match("/" .. dir .. "$") then
+	for _, directory_name in ipairs(excluded_dirs or {}) do
+		if path:find("/" .. directory_name .. "/", 1, true) or path:match("/" .. directory_name .. "$") then
 			return true
 		end
 	end
+
 	return false
 end
 
@@ -117,6 +121,14 @@ local function collect_log_block(lines, start_line_number)
 	return block_lines, end_line_number
 end
 
+local function is_summary_noise(chunk)
+	return chunk == "" or chunk == "," or chunk == ");"
+end
+
+local function first_line_multiline_summary_chunk(line)
+	return line:match("~%s*[^:]+:%d+%s*~%s*(.*)$") or ""
+end
+
 local function extract_multiline_expression(block_lines)
 	if #block_lines <= 1 then
 		return nil
@@ -124,18 +136,19 @@ local function extract_multiline_expression(block_lines)
 
 	local summary_pieces = {}
 	for index, line in ipairs(block_lines) do
-		local chunk = index == 1 and (line:match("~%s*[^:]+:%d+%s*~%s*(.*)$") or "") or line
+		local chunk = index == 1 and first_line_multiline_summary_chunk(line) or line
 		local before_tick = chunk:match("^(.-)`")
+
 		if before_tick ~= nil then
 			chunk = squeeze_spaces(before_tick)
-			if chunk ~= "" and chunk ~= "," and chunk ~= ");" then
+			if not is_summary_noise(chunk) then
 				table.insert(summary_pieces, chunk)
 			end
 			break
 		end
 
 		chunk = squeeze_spaces(chunk)
-		if chunk ~= "" and chunk ~= "," and chunk ~= ");" then
+		if not is_summary_noise(chunk) then
 			table.insert(summary_pieces, chunk)
 		end
 	end
@@ -144,6 +157,7 @@ local function extract_multiline_expression(block_lines)
 	if summary == "" then
 		return nil
 	end
+
 	return truncate(summary, 84)
 end
 
@@ -160,48 +174,62 @@ local function detect_filetype_from_path(path)
 	return FILETYPE_BY_EXTENSION[vim.fn.fnamemodify(path, ":e")] or "text"
 end
 
+local function is_commented_log_line(line, source)
+	return comment.is_commented_line(line, {
+		bufnr = source.bufnr,
+		filetype = source.filetype,
+		path = source.path,
+	})
+end
+
+local function entry_is_stale(embedded_filename, embedded_line, source_filename, line_number)
+	return embedded_filename and embedded_line and (embedded_filename ~= source_filename or embedded_line ~= line_number) or false
+end
+
+local function build_entry(lines, source, marker, line_number)
+	local line = lines[line_number]
+	local block_lines, end_line_number = collect_log_block(lines, line_number)
+	local embedded_filename, embedded_line = parse_embedded_location(line)
+	local label = parse_label(line, block_lines)
+
+	return {
+		id = string.format("%s:%d:%d", source.path, line_number, end_line_number),
+		path = source.path,
+		filename = source.filename,
+		lnum = line_number,
+		end_lnum = end_line_number,
+		log_type = line:match("console%.([%a_][%w_]*)%s*%(") or "log",
+		label = label,
+		summary = label,
+		text = table.concat(block_lines, "\n"),
+		marker = marker,
+		stale = entry_is_stale(embedded_filename, embedded_line, source.filename, line_number),
+		commented = is_commented_log_line(line, source),
+		bufnr = source.bufnr,
+		filetype = source.filetype,
+	}, end_line_number
+end
+
 ---@param lines string[]
 ---@param source table
 ---@return table[]
 function M.parse_lines(lines, source)
 	local entries = {}
 	local marker = config.get_marker()
-	local source_path = source.path or "[No Name]"
-	local source_filename = path_basename(source_path)
-	local source_filetype = source.filetype or detect_filetype_from_path(source_path)
-	local line_number = 1
+	local source_context = {
+		path = source.path or "[No Name]",
+		bufnr = source.bufnr,
+		filetype = source.filetype,
+	}
+	source_context.filename = path_basename(source_context.path)
+	source_context.filetype = source_context.filetype or detect_filetype_from_path(source_context.path)
 
+	local line_number = 1
 	while line_number <= #lines do
 		local line = lines[line_number]
-		local is_marker_line = line and line:find(marker, 1, true)
-		if is_marker_line then
-			local is_commented = comment.is_commented_line(line, {
-				bufnr = source.bufnr,
-				filetype = source_filetype,
-				path = source_path,
-			})
-			local block_lines, end_line_number = collect_log_block(lines, line_number)
-			local embedded_filename, embedded_line = parse_embedded_location(line)
-			local label = parse_label(line, block_lines)
-			local is_stale = embedded_filename and embedded_line and (embedded_filename ~= source_filename or embedded_line ~= line_number) or false
-
-			table.insert(entries, {
-				id = string.format("%s:%d:%d", source_path, line_number, end_line_number),
-				path = source_path,
-				filename = source_filename,
-				lnum = line_number,
-				end_lnum = end_line_number,
-				log_type = line:match("console%.([%a_][%w_]*)%s*%(") or "log",
-				label = label,
-				summary = label,
-				text = table.concat(block_lines, "\n"),
-				marker = marker,
-				stale = is_stale,
-				commented = is_commented,
-				bufnr = source.bufnr,
-				filetype = source_filetype,
-			})
-
+		if line and line:find(marker, 1, true) then
+			local entry, end_line_number = build_entry(lines, source_context, marker, line_number)
+			table.insert(entries, entry)
 			line_number = end_line_number + 1
 		else
 			line_number = line_number + 1
@@ -283,7 +311,10 @@ local function collect_project_paths(cwd, seen_paths)
 
 	for _, path in ipairs(discovered_paths) do
 		local normalized_path = normalize_path(path)
-		if not seen[normalized_path] and not seen_paths[normalized_path] and path_is_readable(normalized_path) and not should_skip_path(normalized_path, excluded_dirs) then
+		local path_not_seen = not seen[normalized_path] and not seen_paths[normalized_path]
+		local path_is_allowed = path_is_readable(normalized_path) and not should_skip_path(normalized_path, excluded_dirs)
+
+		if path_not_seen and path_is_allowed then
 			table.insert(unique_paths, normalized_path)
 			seen[normalized_path] = true
 			if #unique_paths >= max_files then
@@ -310,32 +341,46 @@ function M.scan_paths(paths)
 	return entries
 end
 
-local function collect_entries_for_scope(state)
-	if state.scope == "current_file" then
-		if state.source_bufnr and vim.api.nvim_buf_is_valid(state.source_bufnr) then
-			return M.parse_lines(vim.api.nvim_buf_get_lines(state.source_bufnr, 0, -1, false), {
-				path = normalize_path(vim.api.nvim_buf_get_name(state.source_bufnr)),
-				bufnr = state.source_bufnr,
-				filetype = vim.bo[state.source_bufnr].filetype,
-			})
-		end
-		if state.source_path and path_is_readable(state.source_path) then
-			return M.scan_paths({ state.source_path })
-		end
-		return {}
+local function collect_current_file_entries(state)
+	if state.source_bufnr and vim.api.nvim_buf_is_valid(state.source_bufnr) then
+		return M.parse_lines(vim.api.nvim_buf_get_lines(state.source_bufnr, 0, -1, false), {
+			path = normalize_path(vim.api.nvim_buf_get_name(state.source_bufnr)),
+			bufnr = state.source_bufnr,
+			filetype = vim.bo[state.source_bufnr].filetype,
+		})
 	end
 
+	if state.source_path and path_is_readable(state.source_path) then
+		return M.scan_paths({ state.source_path })
+	end
+
+	return {}
+end
+
+local function append_entries(target_entries, source_entries)
+	for _, entry in ipairs(source_entries) do
+		table.insert(target_entries, entry)
+	end
+end
+
+local function collect_project_entries(state)
 	local entries = {}
 	local buffered_entries, seen_paths = scan_loaded_buffers()
+
 	for _, file_entries in pairs(buffered_entries) do
-		for _, entry in ipairs(file_entries) do
-			table.insert(entries, entry)
-		end
+		append_entries(entries, file_entries)
 	end
-	for _, entry in ipairs(M.scan_paths(collect_project_paths(state.cwd, seen_paths))) do
-		table.insert(entries, entry)
-	end
+
+	append_entries(entries, M.scan_paths(collect_project_paths(state.cwd, seen_paths)))
 	return entries
+end
+
+local function collect_entries_for_scope(state)
+	if state.scope == "current_file" then
+		return collect_current_file_entries(state)
+	end
+
+	return collect_project_entries(state)
 end
 
 local function entry_matches_filter(entry, filter_text)
@@ -355,30 +400,20 @@ local function entry_matches_filter(entry, filter_text)
 	return searchable_text:find(filter_text:lower(), 1, true) ~= nil
 end
 
----@param state table
----@return table[]
-function M.collect_groups(state)
-	local grouped = {}
-	for _, entry in ipairs(collect_entries_for_scope(state)) do
-		if entry_matches_filter(entry, state.filter or "") then
-			grouped[entry.path] = grouped[entry.path] or {
-				path = entry.path,
-				filename = entry.filename,
-				entries = {},
-				count = 0,
-			}
-			table.insert(grouped[entry.path].entries, entry)
+local function sort_group_entries(group)
+	table.sort(group.entries, function(left, right)
+		if left.lnum == right.lnum then
+			return left.id < right.id
 		end
-	end
+		return left.lnum < right.lnum
+	end)
+end
 
+local function sorted_groups(grouped_entries_by_path)
 	local groups = {}
-	for _, group in pairs(grouped) do
-		table.sort(group.entries, function(left, right)
-			if left.lnum == right.lnum then
-				return left.id < right.id
-			end
-			return left.lnum < right.lnum
-		end)
+
+	for _, group in pairs(grouped_entries_by_path) do
+		sort_group_entries(group)
 		group.count = #group.entries
 		table.insert(groups, group)
 	end
@@ -387,8 +422,27 @@ function M.collect_groups(state)
 		return left.path < right.path
 	end)
 
-	state.groups = groups
 	return groups
+end
+
+---@param state table
+---@return table[]
+function M.collect_groups(state)
+	local grouped_entries_by_path = {}
+	for _, entry in ipairs(collect_entries_for_scope(state)) do
+		if entry_matches_filter(entry, state.filter or "") then
+			grouped_entries_by_path[entry.path] = grouped_entries_by_path[entry.path] or {
+				path = entry.path,
+				filename = entry.filename,
+				entries = {},
+				count = 0,
+			}
+			table.insert(grouped_entries_by_path[entry.path].entries, entry)
+		end
+	end
+
+	state.groups = sorted_groups(grouped_entries_by_path)
+	return state.groups
 end
 
 return M

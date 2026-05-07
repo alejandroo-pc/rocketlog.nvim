@@ -21,6 +21,26 @@ local function trim_right(text)
 	return (text or ""):gsub("%s+$", "")
 end
 
+local function trim_left(text)
+	return (text or ""):gsub("^%s+", "")
+end
+
+local function get_indent_unit()
+	local shiftwidth = vim.bo.shiftwidth
+	if not shiftwidth or shiftwidth < 1 then
+		shiftwidth = vim.bo.tabstop
+	end
+	if not shiftwidth or shiftwidth < 1 then
+		shiftwidth = 2
+	end
+
+	if vim.bo.expandtab == false then
+		return "	"
+	end
+
+	return string.rep(" ", shiftwidth)
+end
+
 local function get_config_flag(flag_name, default)
 	local ok_config, cfg = pcall(require, "rocketlog.config")
 	if not ok_config or not cfg or not cfg.config then
@@ -170,6 +190,67 @@ local function insert_lines_at(lines_to_insert, insert_at_1_based)
 	return insert_at_1_based
 end
 
+local function get_block_body_indent(ts_target)
+	local base_indent = get_line_indent(ts_target.block_start_line)
+	if ts_target.reference_line and ts_target.reference_line > ts_target.block_start_line then
+		local reference_indent = get_line_indent(ts_target.reference_line)
+		if reference_indent ~= "" then
+			return reference_indent
+		end
+	end
+
+	if ts_target.block_start_line == ts_target.block_end_line then
+		return base_indent .. "  "
+	end
+
+	return base_indent .. get_indent_unit()
+end
+
+local function insert_inside_block_start(log_lines, ts_target)
+	local block_start_line = ts_target.block_start_line
+	local block_end_line = ts_target.block_end_line
+	local block_start_col0 = ts_target.block_start_col or 0
+	local block_end_col0 = ts_target.block_end_col or block_start_col0
+	local start_line_text = vim.fn.getline(block_start_line) or ""
+	local body_indent = get_block_body_indent(ts_target)
+	local indented_log_lines = apply_indent(log_lines, body_indent)
+
+	if block_start_line == block_end_line then
+		local prefix = start_line_text:sub(1, block_start_col0 + 1)
+		local inside_text = start_line_text:sub(block_start_col0 + 2, math.max(block_start_col0 + 1, block_end_col0 - 1))
+		local suffix = start_line_text:sub(block_end_col0 + 1)
+		local replacement_lines = { prefix }
+		local trimmed_inside = trim_left(trim_right(inside_text))
+		local base_indent = get_line_indent(block_start_line)
+
+		vim.list_extend(replacement_lines, indented_log_lines)
+		if trimmed_inside ~= "" then
+			table.insert(replacement_lines, body_indent .. trimmed_inside)
+		end
+		table.insert(replacement_lines, base_indent .. "}" .. suffix)
+
+		vim.api.nvim_buf_set_lines(0, block_start_line - 1, block_start_line, false, replacement_lines)
+		return block_start_line + 1
+	end
+
+	local remainder_after_open = trim_left(start_line_text:sub(block_start_col0 + 2))
+	if remainder_after_open ~= "" then
+		local prefix = start_line_text:sub(1, block_start_col0 + 1)
+		local replacement_lines = { prefix }
+		vim.list_extend(replacement_lines, indented_log_lines)
+		table.insert(replacement_lines, body_indent .. remainder_after_open)
+		vim.api.nvim_buf_set_lines(0, block_start_line - 1, block_start_line, false, replacement_lines)
+		return block_start_line + 1
+	end
+
+	local insert_line = ts_target.insert_line or block_end_line
+	if insert_line <= block_start_line then
+		insert_line = block_start_line + 1
+	end
+
+	return insert_lines_at(indented_log_lines, insert_line)
+end
+
 ---@param log_line string|string[]
 ---@param start_line integer
 ---@param context table|nil
@@ -178,11 +259,17 @@ function M.insert_after_statement(log_line, start_line, context)
 	local log_lines = type(log_line) == "table" and log_line or { log_line }
 	local ts_target, ts_error = try_treesitter_target(context)
 
-	if ts_target and ts_target.line then
-		local reference_line = ts_target.reference_line or ts_target.line
-		local indented_lines = apply_indent(log_lines, get_line_indent(reference_line))
-		local insert_at = ts_target.mode == "after" and (ts_target.line + 1) or ts_target.line
-		return insert_lines_at(indented_lines, insert_at)
+	if ts_target then
+		if ts_target.mode == "inside_block_start" then
+			return insert_inside_block_start(log_lines, ts_target)
+		end
+
+		if ts_target.line then
+			local reference_line = ts_target.reference_line or ts_target.line
+			local indented_lines = apply_indent(log_lines, get_line_indent(reference_line))
+			local insert_at = ts_target.mode == "after" and (ts_target.line + 1) or ts_target.line
+			return insert_lines_at(indented_lines, insert_at)
+		end
 	end
 
 	if ts_error == "implicit_arrow_body" or ts_error == "selection_in_function_header" then

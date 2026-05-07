@@ -193,6 +193,25 @@ local function mark_dashboard_target(entity_type, entity, role)
 	pcall(entity_type == "buf" and vim.api.nvim_buf_set_var or vim.api.nvim_win_set_var, entity, "rocketlog_dashboard_role", role)
 end
 
+local function create_dashboard_scratch_buffer(filetype, role)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[bufnr].buftype = "nofile"
+	vim.bo[bufnr].bufhidden = "wipe"
+	vim.bo[bufnr].swapfile = false
+	vim.bo[bufnr].modifiable = true
+	vim.bo[bufnr].filetype = filetype
+	mark_dashboard_target("buf", bufnr, role)
+	return bufnr
+end
+
+local function apply_modal_window_highlights(window_id)
+	vim.wo[window_id].winhighlight = table.concat({
+		"Normal:NormalFloat",
+		"FloatBorder:RocketLogDashboardPaneBorder",
+		"FloatTitle:RocketLogDashboardPaneTitle",
+	}, ",")
+end
+
 local function close_filter_prompt(state)
 	pcall(vim.cmd, "stopinsert")
 
@@ -482,13 +501,7 @@ function M.open_live_filter(state)
 		return
 	end
 
-	local filter_buf = vim.api.nvim_create_buf(false, true)
-	vim.bo[filter_buf].buftype = "nofile"
-	vim.bo[filter_buf].bufhidden = "wipe"
-	vim.bo[filter_buf].swapfile = false
-	vim.bo[filter_buf].modifiable = true
-	vim.bo[filter_buf].filetype = "rocketlogfilter"
-	mark_dashboard_target("buf", filter_buf, "filter")
+	local filter_buf = create_dashboard_scratch_buffer("rocketlogfilter", "filter")
 	vim.api.nvim_buf_set_lines(filter_buf, 0, -1, false, { state.filter or "" })
 
 	local width = state.ui.filter_width or 48
@@ -507,11 +520,7 @@ function M.open_live_filter(state)
 	})
 	mark_dashboard_target("win", filter_win, "filter")
 	vim.wo[filter_win].wrap = false
-	vim.wo[filter_win].winhighlight = table.concat({
-		"Normal:NormalFloat",
-		"FloatBorder:RocketLogDashboardPaneBorder",
-		"FloatTitle:RocketLogDashboardPaneTitle",
-	}, ",")
+	apply_modal_window_highlights(filter_win)
 
 	state.ui.filter_buf = filter_buf
 	state.ui.filter_win = filter_win
@@ -587,13 +596,7 @@ function M.show_help(state)
 		return
 	end
 
-	local help_buf = vim.api.nvim_create_buf(false, true)
-	vim.bo[help_buf].buftype = "nofile"
-	vim.bo[help_buf].bufhidden = "wipe"
-	vim.bo[help_buf].swapfile = false
-	vim.bo[help_buf].modifiable = true
-	vim.bo[help_buf].filetype = "rocketloghelp"
-	mark_dashboard_target("buf", help_buf, "help_modal")
+	local help_buf = create_dashboard_scratch_buffer("rocketloghelp", "help_modal")
 
 	local width = math.min(88, math.max(54, (state.ui.width or 88) - 14))
 	local lines = build_help_modal_lines(width)
@@ -620,11 +623,7 @@ function M.show_help(state)
 	mark_dashboard_target("win", help_win, "help_modal")
 	vim.wo[help_win].wrap = false
 	vim.wo[help_win].cursorline = false
-	vim.wo[help_win].winhighlight = table.concat({
-		"Normal:NormalFloat",
-		"FloatBorder:RocketLogDashboardPaneBorder",
-		"FloatTitle:RocketLogDashboardPaneTitle",
-	}, ",")
+	apply_modal_window_highlights(help_win)
 
 	state.ui.help_modal_buf = help_buf
 	state.ui.help_modal_win = help_win

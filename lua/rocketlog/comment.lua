@@ -72,12 +72,13 @@ end
 ---@return string, string
 local function split_at_comment_indent(line_text, insert_indent)
 	local full_indent, body = split_indent(line_text)
-	if not insert_indent or insert_indent == "" then
+	if insert_indent == nil then
 		return full_indent, body
 	end
 
+	local safe_line = line_text or ""
 	local insert_width = math.min(#insert_indent, #full_indent)
-	return (line_text or ""):sub(1, insert_width), (line_text or ""):sub(insert_width + 1)
+	return safe_line:sub(1, insert_width), safe_line:sub(insert_width + 1)
 end
 
 ---@param lines string[]
