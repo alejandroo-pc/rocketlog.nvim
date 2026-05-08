@@ -271,6 +271,32 @@ describe("rocketlog.dashboard.actions", function()
 		restore_scan()
 	end)
 
+	it("deletes the full selected formatted console statement", function()
+		local source_bufnr = h.set_buffer({
+			"const before = true;",
+			"console.log(",
+			"  `🚀[ROCKETLOG] ~ test.ts:2 ~ before:`,",
+			"  before",
+			");",
+			"const after = true;",
+		}, { filetype = "typescript", name = "/tmp/test.ts" })
+		local state = state_mod.new(source_bufnr)
+		state.scope = "current_file"
+		state_mod.set_current(state)
+		layout.open(state)
+		scan.collect_groups(state)
+		render.refresh(state)
+		vim.api.nvim_win_set_cursor(state.ui.list_win, { 2, 0 })
+
+		actions.delete_selected(state)
+
+		assert.are.same({
+			"const before = true;",
+			"const after = true;",
+		}, vim.api.nvim_buf_get_lines(source_bufnr, 0, -1, false))
+		assert.are.equal(0, #(state.groups or {}))
+	end)
+
 	it("toggles the selected log into a commented dashboard entry", function()
 		local source_bufnr = h.set_buffer({
 			"const before = true;",
