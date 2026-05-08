@@ -94,6 +94,26 @@ describe("rocketlog.dashboard.scan", function()
 		assert.are.equal(4, entries[1].end_lnum)
 	end)
 
+	it("includes the console wrapper when the marker is on a formatted argument line", function()
+		vim.fn.writefile({
+			"const before = true;",
+			"console.log(",
+			"  `🚀[ROCKETLOG] ~ test.ts:2 ~ before:`,",
+			"  before",
+			");",
+			"const after = true;",
+		}, tmp_path)
+
+		local entries = scan.scan_paths({ tmp_path })
+		assert.are.equal(1, #entries)
+		assert.are.equal(2, entries[1].lnum)
+		assert.are.equal(5, entries[1].end_lnum)
+		assert.are.equal("log", entries[1].log_type)
+		assert.are.equal("before", entries[1].label)
+		assert.is_truthy(entries[1].text:find("console.log(", 1, true))
+		assert.is_truthy(entries[1].text:find(");", 1, true))
+	end)
+
 	it("does not over-extend end_lnum past the console call", function()
 		vim.fn.writefile({
 			"const a = 1;",

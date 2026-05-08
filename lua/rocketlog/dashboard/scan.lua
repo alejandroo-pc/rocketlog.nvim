@@ -81,6 +81,29 @@ local function is_single_line_console_call(line)
 	return line:match("console%.[%a_][%w_]*%s*%b()%s*;?%s*$") ~= nil
 end
 
+local function is_console_call_start(line)
+	return line ~= nil and line:match("console%.[%a_][%w_]*%s*%(") ~= nil
+end
+
+local function is_statement_boundary(line)
+	return line == nil or line:match("^%s*$") ~= nil or line:match(";%s*$") ~= nil
+end
+
+local function find_console_call_start(lines, marker_line_number)
+	for line_number = marker_line_number, 1, -1 do
+		local line = lines[line_number]
+		if is_console_call_start(line) then
+			return line_number
+		end
+
+		if line_number ~= marker_line_number and is_statement_boundary(line) then
+			break
+		end
+	end
+
+	return marker_line_number
+end
+
 local function count_char(text, needle)
 	local count = 0
 	for index = 1, #text do
@@ -91,13 +114,14 @@ local function count_char(text, needle)
 	return count
 end
 
-local function collect_log_block(lines, start_line_number)
+local function collect_log_block(lines, marker_line_number)
+	local start_line_number = find_console_call_start(lines, marker_line_number)
 	local first_line = lines[start_line_number]
 	local block_lines = { first_line }
 	local end_line_number = start_line_number
 
 	if is_single_line_console_call(first_line) then
-		return block_lines, end_line_number
+		return block_lines, start_line_number, end_line_number
 	end
 
 	local template_closed = first_line:match("`.*`") ~= nil
@@ -118,7 +142,7 @@ local function collect_log_block(lines, start_line_number)
 		end
 	end
 
-	return block_lines, end_line_number
+	return block_lines, start_line_number, end_line_number
 end
 
 local function is_summary_noise(chunk)
@@ -129,14 +153,25 @@ local function first_line_multiline_summary_chunk(line)
 	return line:match("~%s*[^:]+:%d+%s*~%s*(.*)$") or ""
 end
 
-local function extract_multiline_expression(block_lines)
+local function find_marker_block_index(block_lines, marker)
+	for index, line in ipairs(block_lines) do
+		if line and line:find(marker, 1, true) then
+			return index
+		end
+	end
+
+	return 1
+end
+
+local function extract_multiline_expression(block_lines, marker_index)
 	if #block_lines <= 1 then
 		return nil
 	end
 
 	local summary_pieces = {}
-	for index, line in ipairs(block_lines) do
-		local chunk = index == 1 and first_line_multiline_summary_chunk(line) or line
+	for index = marker_index, #block_lines do
+		local line = block_lines[index]
+		local chunk = index == marker_index and first_line_multiline_summary_chunk(line) or line
 		local before_tick = chunk:match("^(.-)`")
 
 		if before_tick ~= nil then
@@ -161,13 +196,13 @@ local function extract_multiline_expression(block_lines)
 	return truncate(summary, 84)
 end
 
-local function parse_label(first_line, block_lines)
-	local inline_label = first_line:match("~%s*[^:]+:%d+%s*~%s*(.-):`")
+local function parse_label(marker_line, block_lines, marker_index)
+	local inline_label = marker_line:match("~%s*[^:]+:%d+%s*~%s*(.-):`")
 	if inline_label and inline_label ~= "" then
 		return inline_label
 	end
 
-	return extract_multiline_expression(block_lines) or "<multiline>"
+	return extract_multiline_expression(block_lines, marker_index) or "<multiline>"
 end
 
 local function detect_filetype_from_path(path)
@@ -186,25 +221,27 @@ local function entry_is_stale(embedded_filename, embedded_line, source_filename,
 	return embedded_filename and embedded_line and (embedded_filename ~= source_filename or embedded_line ~= line_number) or false
 end
 
-local function build_entry(lines, source, marker, line_number)
-	local line = lines[line_number]
-	local block_lines, end_line_number = collect_log_block(lines, line_number)
-	local embedded_filename, embedded_line = parse_embedded_location(line)
-	local label = parse_label(line, block_lines)
+local function build_entry(lines, source, marker, marker_line_number)
+	local marker_line = lines[marker_line_number]
+	local block_lines, start_line_number, end_line_number = collect_log_block(lines, marker_line_number)
+	local marker_index = find_marker_block_index(block_lines, marker)
+	local start_line = block_lines[1] or marker_line
+	local embedded_filename, embedded_line = parse_embedded_location(marker_line)
+	local label = parse_label(marker_line, block_lines, marker_index)
 
 	return {
-		id = string.format("%s:%d:%d", source.path, line_number, end_line_number),
+		id = string.format("%s:%d:%d", source.path, start_line_number, end_line_number),
 		path = source.path,
 		filename = source.filename,
-		lnum = line_number,
+		lnum = start_line_number,
 		end_lnum = end_line_number,
-		log_type = line:match("console%.([%a_][%w_]*)%s*%(") or "log",
+		log_type = start_line:match("console%.([%a_][%w_]*)%s*%(") or "log",
 		label = label,
 		summary = label,
 		text = table.concat(block_lines, "\n"),
 		marker = marker,
-		stale = entry_is_stale(embedded_filename, embedded_line, source.filename, line_number),
-		commented = is_commented_log_line(line, source),
+		stale = entry_is_stale(embedded_filename, embedded_line, source.filename, marker_line_number),
+		commented = is_commented_log_line(marker_line, source),
 		bufnr = source.bufnr,
 		filetype = source.filetype,
 	}, end_line_number
