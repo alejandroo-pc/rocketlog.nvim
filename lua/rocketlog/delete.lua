@@ -35,7 +35,12 @@ local function is_rocketlog_line(line_text)
 	end
 
 	-- Legacy fallback for older logs before the explicit marker was added.
-	return line_text:match("^%s*console%.[%a_]+%s*%(`🚀%s*~") ~= nil
+	if line_text:match("^%s*console%.[%a_]+%s*%(`🚀%s*~") ~= nil then
+		return true
+	end
+
+	-- No-prefix format: console.log(`file.ts:42 | var:`, var);
+	return line_text:match("^%s*console%.[%a_]+%s*%(`[^`]+:%d+%s*|") ~= nil
 end
 
 ---Return a byte column on the line to anchor Tree-sitter node lookup.
@@ -52,6 +57,12 @@ local function marker_col0(line_text)
 	local rocket_col = line_text:find("🚀", 1, true)
 	if rocket_col then
 		return rocket_col - 1
+	end
+
+	-- No-prefix format: anchor to the opening backtick of the template literal.
+	local backtick_col = line_text:find("`", 1, true)
+	if backtick_col then
+		return backtick_col - 1
 	end
 
 	local first_nonblank = line_text:find("%S")

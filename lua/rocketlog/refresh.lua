@@ -13,6 +13,8 @@ local function build_location_patterns(marker_label)
 	return {
 		"(`🚀%[" .. escaped_label .. "%]%s*~%s*)[^:]+:%d+(%s*~%s*)",
 		"(`🚀%s*~%s*)[^:]+:%d+(%s*~%s*)",
+		-- No-prefix format: `file.ts:42 | var:`
+		"(`)[^:`]+:%d+(%s*|%s*)",
 	}
 end
 

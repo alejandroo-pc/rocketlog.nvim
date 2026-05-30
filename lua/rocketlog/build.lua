@@ -138,6 +138,19 @@ end
 local function build_single_line_log(console_method, marker_label, file, line_number, expression)
 	local label_text = escape_template_text(normalize_label_text_single_line(expression))
 
+	if not config.get_show_prefix() then
+		return {
+			string.format(
+				"console.%s(`%s:%d | %s:`, %s);",
+				console_method,
+				file,
+				line_number,
+				label_text,
+				expression
+			),
+		}
+	end
+
 	return {
 		string.format(
 			"console.%s(`🚀[%s] ~ %s:%d ~ %s:`, %s);",
@@ -153,6 +166,26 @@ end
 
 local function build_multiline_log(console_method, marker_label, file, line_number, expression_lines)
 	local normalized_expression_lines = dedent_lines_smart(expression_lines)
+
+	if not config.get_show_prefix() then
+		local output_lines = {
+			string.format("console.%s(`%s:%d |", console_method, file, line_number),
+		}
+
+		for _, expression_line in ipairs(normalized_expression_lines) do
+			table.insert(output_lines, escape_template_text(expression_line))
+		end
+
+		output_lines[#output_lines] = output_lines[#output_lines] .. "`,"
+
+		for _, expression_line in ipairs(normalized_expression_lines) do
+			table.insert(output_lines, "  " .. expression_line)
+		end
+
+		table.insert(output_lines, ");")
+		return output_lines
+	end
+
 	local output_lines = {
 		string.format("console.%s(`🚀[%s] ~ %s:%d ~", console_method, marker_label, file, line_number),
 	}

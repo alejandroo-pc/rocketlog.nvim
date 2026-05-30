@@ -38,6 +38,7 @@ M.defaults = {
 		dashboard = "<leader>rr",
 	},
 	label = DEFAULT_LABEL,
+	show_prefix = true,
 	enabled = true,
 	refresh_on_save = true,
 	refresh_on_insert = true,
@@ -91,6 +92,14 @@ end
 ---@return string
 function M.get_marker()
 	return "🚀[" .. M.get_label() .. "]"
+end
+
+---@return boolean
+function M.get_show_prefix()
+	if M.config.show_prefix == nil then
+		return true
+	end
+	return M.config.show_prefix == true
 end
 
 ---@return table<string, boolean>
