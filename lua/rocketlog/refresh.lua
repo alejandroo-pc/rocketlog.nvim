@@ -11,10 +11,11 @@ local function build_location_patterns(marker_label)
 	local escaped_label = escape_lua_pattern(marker_label)
 
 	return {
+		-- Legacy rocket format: `🚀[LABEL] ~ file.ts:42 ~ var:`
 		"(`🚀%[" .. escaped_label .. "%]%s*~%s*)[^:]+:%d+(%s*~%s*)",
 		"(`🚀%s*~%s*)[^:]+:%d+(%s*~%s*)",
-		-- No-prefix format: `file.ts:42 | var:`
-		"(`)[^:`]+:%d+(%s*|%s*)",
+		-- New prefix format: "file.ts:42 | var" — capture quote, replace file:linenum before pipe
+		'(")[^"|]+:%d+(%s*|)',
 	}
 end
 

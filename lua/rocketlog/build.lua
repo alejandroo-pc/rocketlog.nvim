@@ -8,12 +8,6 @@ local WRAPPED_BLOCK_PAIRS = {
 	["("] = ")",
 }
 
-local function escape_template_text(text)
-	local escaped_text = text:gsub("\\", "\\\\")
-	escaped_text = escaped_text:gsub("`", "\\`")
-	escaped_text = escaped_text:gsub("%${", "\\${")
-	return escaped_text
-end
 
 local function trim_blank_edges(lines)
 	local start_index = 1
@@ -135,17 +129,19 @@ local function normalize_label_text_single_line(expression)
 	return expression:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function build_single_line_log(console_method, marker_label, file, line_number, expression)
-	local label_text = escape_template_text(normalize_label_text_single_line(expression))
+local function escape_string_text(text)
+	return text:gsub("\\", "\\\\"):gsub('"', '\\"')
+end
+
+local function build_single_line_log(console_method, file, line_number, expression)
+	local label_text = normalize_label_text_single_line(expression)
 
 	if not config.get_show_prefix() then
 		return {
 			string.format(
-				"console.%s(`%s:%d | %s:`, %s);",
+				'console.%s("%s", %s);',
 				console_method,
-				file,
-				line_number,
-				label_text,
+				escape_string_text(label_text),
 				expression
 			),
 		}
@@ -153,54 +149,43 @@ local function build_single_line_log(console_method, marker_label, file, line_nu
 
 	return {
 		string.format(
-			"console.%s(`🚀[%s] ~ %s:%d ~ %s:`, %s);",
+			'console.%s("%s:%d | %s", %s);',
 			console_method,
-			marker_label,
 			file,
 			line_number,
-			label_text,
+			escape_string_text(label_text),
 			expression
 		),
 	}
 end
 
-local function build_multiline_log(console_method, marker_label, file, line_number, expression_lines)
+local function build_multiline_log(console_method, file, line_number, expression_lines)
 	local normalized_expression_lines = dedent_lines_smart(expression_lines)
+	local joined_label = table.concat(normalized_expression_lines, " ")
+	local label_text = normalize_label_text_single_line(joined_label)
 
+	local label_string
 	if not config.get_show_prefix() then
-		local output_lines = {
-			string.format("console.%s(`%s:%d |", console_method, file, line_number),
-		}
-
-		for _, expression_line in ipairs(normalized_expression_lines) do
-			table.insert(output_lines, escape_template_text(expression_line))
-		end
-
-		output_lines[#output_lines] = output_lines[#output_lines] .. "`,"
-
-		for _, expression_line in ipairs(normalized_expression_lines) do
-			table.insert(output_lines, "  " .. expression_line)
-		end
-
-		table.insert(output_lines, ");")
-		return output_lines
+		label_string = string.format('"%s"', escape_string_text(label_text))
+	else
+		label_string = string.format('"%s:%d | %s"', file, line_number, escape_string_text(label_text))
 	end
 
+	-- First arg is the label string, second arg spans multiple lines.
+	local first_expr_line = normalized_expression_lines[1]
 	local output_lines = {
-		string.format("console.%s(`🚀[%s] ~ %s:%d ~", console_method, marker_label, file, line_number),
+		string.format("console.%s(%s, %s", console_method, label_string, first_expr_line),
 	}
 
-	for _, expression_line in ipairs(normalized_expression_lines) do
-		table.insert(output_lines, escape_template_text(expression_line))
+	for i = 2, #normalized_expression_lines do
+		local expr_line = normalized_expression_lines[i]
+		if i == #normalized_expression_lines then
+			table.insert(output_lines, "  " .. expr_line .. ");")
+		else
+			table.insert(output_lines, "  " .. expr_line)
+		end
 	end
 
-	output_lines[#output_lines] = output_lines[#output_lines] .. "`,"
-
-	for _, expression_line in ipairs(normalized_expression_lines) do
-		table.insert(output_lines, "  " .. expression_line)
-	end
-
-	table.insert(output_lines, ");")
 	return output_lines
 end
 
@@ -213,14 +198,13 @@ end
 ---@return string[]
 function M.build_rocket_log_lines(file, line_num, expr, log_type)
 	local console_method = log_type or "log"
-	local marker_label = config.get_label()
 	local expression_lines = vim.split(expr, "\n", { plain = true })
 
 	if #expression_lines == 1 then
-		return build_single_line_log(console_method, marker_label, file, line_num, expr)
+		return build_single_line_log(console_method, file, line_num, expr)
 	end
 
-	return build_multiline_log(console_method, marker_label, file, line_num, expression_lines)
+	return build_multiline_log(console_method, file, line_num, expression_lines)
 end
 
 return M

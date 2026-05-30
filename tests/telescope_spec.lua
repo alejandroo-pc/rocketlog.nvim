@@ -47,9 +47,9 @@ describe("rocketlog.telescope", function()
 		assert.is_truthy(captured)
 		assert.are.equal("grep", captured.source)
 		assert.are.equal("RocketLog", captured.title)
-		-- Must be literal substring search, not regex.
-		assert.are.equal("[ROCKETLOG]", captured.search)
+		-- Regex pattern matching new "file.ts:42 | var" format.
+		assert.is_true(captured.search:find("console", 1, true) ~= nil)
 		assert.is_false(captured.live)
-		assert.is_false(captured.regex)
+		assert.is_true(captured.regex)
 	end)
 end)

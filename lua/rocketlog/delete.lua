@@ -39,8 +39,8 @@ local function is_rocketlog_line(line_text)
 		return true
 	end
 
-	-- No-prefix format: console.log(`file.ts:42 | var:`, var);
-	return line_text:match("^%s*console%.[%a_]+%s*%(`[^`]+:%d+%s*|") ~= nil
+	-- Prefix format: console.log("file.ts:42 | var", var);
+	return line_text:match('^%s*console%.[%a_]+%s*%("[^"]+:%d+%s*|') ~= nil
 end
 
 ---Return a byte column on the line to anchor Tree-sitter node lookup.
@@ -59,10 +59,10 @@ local function marker_col0(line_text)
 		return rocket_col - 1
 	end
 
-	-- No-prefix format: anchor to the opening backtick of the template literal.
-	local backtick_col = line_text:find("`", 1, true)
-	if backtick_col then
-		return backtick_col - 1
+	-- New format: anchor to opening quote of the label string.
+	local quote_col = line_text:find('"', 1, true)
+	if quote_col then
+		return quote_col - 1
 	end
 
 	local first_nonblank = line_text:find("%S")
